@@ -11,10 +11,21 @@ import urllib3
 # --- SSL-WARNUNGEN STUMMSCHALTEN (Für saubere GitHub-Actions-Logs) ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- GLOBALER SSL-FIX ---
+# --- BULLETPROOF SSL & HOSTNAME PATCH (Hebelt den OpenSSL-Bug in urllib3 v2+ aus) ---
+try:
+    orig_create_context = urllib3.util.ssl_.create_urllib3_context
+    def patched_create_context(*args, **kwargs):
+        context = orig_create_context(*args, **kwargs)
+        context.check_hostname = False  # Zwingt OpenSSL, Hostname-Mismatches komplett zu ignorieren
+        return context
+    urllib3.util.ssl_.create_urllib3_context = patched_create_context
+    print("🔓 Patched urllib3 SSLContext: Hostname-Verifizierung global deaktiviert.")
+except Exception as e:
+    print(f"⚠️ Konnte Core-SSL-Patch nicht anwenden: {e}")
+
+# --- GLOBALER SSL-FIX FALLBACK ---
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
-    print("🔓 Unverified SSL-Kontext erfolgreich initialisiert.")
 except AttributeError:
     pass
 
@@ -91,7 +102,6 @@ class GermanyJobIngestionV3:
                 }
 
                 try:
-                    # FIX: verify=False zwingt requests, die fehlerhafte SSL-Kette der BA zu ignorieren
                     response = requests.get(
                         self.api_url, 
                         headers=self.headers, 
@@ -122,7 +132,7 @@ class GermanyJobIngestionV3:
                         if chiffre in seen_chiffren:
                             continue
 
-                        # Harter Vorab-Ausschluss für Non-Tech & Ausbildung (Die Handelsfachwirt-Bremse)
+                        # Harter Vorab-Ausschluss für Non-Tech & Ausbildung
                         if any(noise in title_lower for noise in self.noise_blacklist):
                             continue
 
@@ -149,7 +159,6 @@ class GermanyJobIngestionV3:
                         seen_chiffren.add(chiffre)
                         term_jobs_count += 1
 
-                    # Seitensteuerung steht sauber AUSSERHALB der Job-Schleife
                     current_page += 1
                     time.sleep(0.3)  # Rate-Limiting-Respekt für die Bundesagentur
 
