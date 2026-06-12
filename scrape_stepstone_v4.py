@@ -1,0 +1,189 @@
+import json
+import os
+import random
+import glob
+from datetime import datetime
+import time
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+
+
+class StepStoneIncrementalPipeline:
+
+    def __init__(self):
+        self.output_dir = "data/raw/stepstone"
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.base_url = "https://www.stepstone.de/jobs/data/in-hamburg?radius=10&administrative_division_id=de_hamburg"
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+
+    def _load_state_or_create_new(self) -> tuple:
+        """
+        Checks if a state file from today exists. 
+        Returns (accumulated_jobs, start_page, file_path)
+        """
+        today_str = datetime.now().strftime("%Y%m%d")
+        # Search for a file generated today
+        existing_files = glob.glob(os.path.join(self.output_dir, f"stepstone_hamburg_V4_{today_str}_*.json"))
+        
+        if existing_files:
+            # Take the most recent file from today to append data
+            latest_file = max(existing_files, key=os.path.getctime)
+            print(f"🔄 Found existing state file from today: {latest_file}")
+            try:
+                with open(latest_file, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                jobs = payload.get("jobs", [])
+                
+                # Determine the last successfully scraped page
+                if jobs:
+                    last_page = max(job.get("source_page", 1) for job in jobs)
+                    next_page = last_page + 1
+                    print(f"▶ Resuming state: {len(jobs)} jobs already stored. Starting at page {next_page}.")
+                    return jobs, next_page, latest_file
+            except Exception as e:
+                print(f"⚠ Could not read state file smoothly ({e}). Starting fresh.")
+        
+        # Fresh setup if no file from today exists
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        new_file_path = os.path.join(self.output_dir, f"stepstone_hamburg_V4_{timestamp}.json")
+        print("🆕 No recent daily state found. Starting a brand new ingestion batch.")
+        return [], 1, new_file_path
+
+    def scrape_all_available_jobs(self, max_pages: int = 50):
+        """Scrapes jobs with dynamic starting points based on previous checkpoint states."""
+        # Load checkpoint or initialize fresh arrays
+        scraped_jobs, current_page, file_path = self._load_state_or_create_new()
+
+        if current_page > max_pages:
+            print(f"🎯 Target max_pages ({max_pages}) already satisfied by the checkpoint file. Nothing to do!")
+            return
+
+        print("🤖 Launching Resilience-Enhanced Incremental Ingestion Pipeline...")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            
+            def create_fresh_context():
+                version = random.choice(["120.0.0.0", "121.0.0.0", "122.0.0.0"])
+                ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36"
+                return browser.new_context(user_agent=ua, viewport={"width": 1920, "height": 1080})
+
+            context = create_fresh_context()
+            page = context.new_page()
+
+            while current_page <= max_pages:
+                print(f"🌐 Ingesting StepStone Hamburg - Page {current_page}...")
+                url = f"{self.base_url}&page={current_page}"
+
+                # Context rotation every 5 pages
+                if current_page > 1 and current_page % 5 == 1:
+                    print("🔄 Rotating Browser Context & Session Tokens to reset infrastructure tracking...")
+                    page.close()
+                    context.close()
+                    time.sleep(random.uniform(4.0, 8.0))
+                    context = create_fresh_context()
+                    page = context.new_page()
+
+                try:
+                    page.goto(url, wait_until="commit", timeout=25000)
+                    page.wait_for_timeout(random.uniform(1500, 2500))
+
+                    # Human-like scrolling pattern
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3);")
+                    page.wait_for_timeout(random.uniform(800, 1500))
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight / 1.5);")
+                    page.wait_for_timeout(random.uniform(800, 1500))
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                    page.wait_for_timeout(1000)
+
+                    html_content = page.content()
+                    soup = BeautifulSoup(html_content, "html.parser")
+                    job_cards = soup.find_all("article")
+
+                    print(f"✅ Page {current_page} successfully processed ({page_jobs_count} jobs stored).")
+                    
+                    # NEW HOTFIX: Break if the page was completely empty of valid job listings
+                    if page_jobs_count == 0:
+                        print(f"🛑 Page {current_page} returned 0 valid jobs. Assuming organic market end. Terminating ingestion.")
+                        break
+
+                    current_page += 1
+
+                    page_jobs_count = 0
+                    for card in job_cards:
+                        title_element = card.find("h2") or card.find(attrs={"data-testid": "job-item-title"})
+                        if not title_element:
+                            continue
+
+                        title = title_element.get_text(strip=True)
+
+                        job_link = "No Link"
+                        anchor = card.find("a", href=lambda x: x and "stellenangebote" in x) or card.find("a", href=True)
+                        if anchor:
+                            href = anchor.get("href")
+                            job_link = f"https://www.stepstone.de{href}" if href.startswith("/") else href
+
+                        company = None
+                        logo_img = card.find("img")
+                        if logo_img and logo_img.get("alt"):
+                            alt_text = logo_img.get("alt").strip()
+                            company = alt_text.lower().replace("logo von", "").strip().title() if "logo von" in alt_text.lower() else alt_text
+
+                        if not company:
+                            company_div = card.find("div", class_="res-ewgtgq")
+                            if company_div:
+                                raw_text = company_div.get_text(strip=True)
+                                company = company_div.find("span").get_text(strip=True) if title in raw_text and company_div.find("span") else raw_text
+
+                        company = company or "Spannendes Unternehmen"
+
+                        card_text = card.get_text(" | ", strip=True)
+                        remote_status = "No Info"
+                        if "home-office" in card_text.lower() or "remote" in card_text.lower():
+                            remote_status = "Teilweise Home-Office" if "teilweise" in card_text.lower() else "Vollständig Remote"
+
+                        scraped_jobs.append({
+                            "title": title,
+                            "company": company,
+                            "link": job_link,
+                            "location": "Hamburg",
+                            "remote_status": remote_status,
+                            "scraped_at": datetime.now().isoformat(),
+                            "source_page": current_page
+                        })
+                        page_jobs_count += 1
+
+                    print(f"✅ Page {current_page} successfully processed ({page_jobs_count} jobs stored).")
+                    current_page += 1
+
+                    # Intermediate checkpoint save after each successful page
+                    # This guarantees absolutely no data loss if page N+1 crashes
+                    output_payload = {
+                        "metadata": {
+                            "source": "stepstone.de",
+                            "updated_at": datetime.now().isoformat(),
+                            "total_jobs_scraped": len(scraped_jobs),
+                        },
+                        "jobs": scraped_jobs,
+                    }
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        json.dump(output_payload, f, ensure_ascii=False, indent=4)
+
+                    time.sleep(random.uniform(3.5, 6.5))
+
+                except Exception as e:
+                    print(f"❌ Error encountered on page {current_page}: {e}")
+                    print("🚀 Current state securely saved. Run the script again to resume from this exact checkpoint.")
+                    break
+
+            context.close()
+            browser.close()
+
+        print(f"\n🎯 [INCREMENTAL BATCH DONE] File status: {len(scraped_jobs)} total jobs inside {file_path}")
+
+
+if __name__ == "__main__":
+    pipeline = StepStoneIncrementalPipeline()
+    pipeline.scrape_all_available_jobs(max_pages=50)

@@ -1,0 +1,14 @@
+# Virtuelle Umgebung ignorieren
+.venv/
+venv/
+env/
+
+# Python-Cache ignorieren
+__pycache__/
+*.pyc
+
+# Lokale Daten-Dumps ignorieren
+data/
+
+# Lokale Passwörter/Konfigurationen
+.env
