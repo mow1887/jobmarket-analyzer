@@ -1,0 +1,48 @@
+name: Daily Job Market ETL Pipeline
+
+on:
+  schedule:
+    # Job läuft jeden Tag ca. 03:00 CEST
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Erlaubt es dir, die Pipeline jederzeit händisch bei GitHub per Klick zu starten
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Code aus dem GitHub Repository auschecken
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    # 2. Python Umgebung auf dem Server aufsetzen
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11' # Stabilste Version für alle Pakete im Linux-Umfeld
+        cache: 'pip'
+
+    # 3. Alle Abhängigkeiten sauber installieren
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install playwright boto3 requests
+        
+    # 4. Playwright Core-Browser auf dem Linux-Runner installieren
+    - name: Install Playwright Chromium
+      run: python -m playwright install chromium
+
+    # 5. Schritt A: Ingestion ausführen (Sucht nach neuen Rohdaten & lädt Bronze-Layer zu S3)
+    - name: Execute Job Ingestion (API Fetch)
+      env:
+        BA_CLIENT_ID: ${{ secrets.BA_CLIENT_ID }} 
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      run: python fetch_ba_jobs_de_v3.py
+
+    # 6. Schritt B: Transformation & S3-Synchronisation ausführen (Silver-Layer zu S3)
+    - name: Execute Transformation & S3-Sync
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      run: python transform_and_clean_de_v3.py
