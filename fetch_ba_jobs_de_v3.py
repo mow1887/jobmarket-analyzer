@@ -6,8 +6,12 @@ import ssl
 from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
+import urllib3
 
-# --- GLOBALER SSL-FIX (Für Zertifikats-Staus unter Windows) ---
+# --- SSL-WARNUNGEN STUMMSCHALTEN (Für saubere GitHub-Actions-Logs) ---
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# --- GLOBALER SSL-FIX ---
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
     print("🔓 Unverified SSL-Kontext erfolgreich initialisiert.")
@@ -87,7 +91,14 @@ class GermanyJobIngestionV3:
                 }
 
                 try:
-                    response = requests.get(self.api_url, headers=self.headers, params=params, timeout=15)
+                    # FIX: verify=False zwingt requests, die fehlerhafte SSL-Kette der BA zu ignorieren
+                    response = requests.get(
+                        self.api_url, 
+                        headers=self.headers, 
+                        params=params, 
+                        timeout=15, 
+                        verify=False
+                    )
                     
                     if response.status_code == 401:
                         print("❌ API-Authentifizierung fehlgeschlagen! Bitte BA_CLIENT_ID prüfen.")
@@ -128,7 +139,7 @@ class GermanyJobIngestionV3:
                             "link": raw_job.get("links", {}).get("details", {}).get("href"),
                             "externe_url": raw_job.get("links", {}).get("externeAnzeige", {}).get("href") or "Keine externe URL",
                             "location": location_str,
-                            "remote_status": "Keine Angabe / Präsenz", # Wird im Transformer verfeinert
+                            "remote_status": "Keine Angabe / Präsenz",
                             "chiffrenummer": chiffre,
                             "veroeffentlicht_am": time_info,
                             "aenderungsdatum": mod_info
@@ -138,7 +149,7 @@ class GermanyJobIngestionV3:
                         seen_chiffren.add(chiffre)
                         term_jobs_count += 1
 
-                    # --- CODE-BUGFIX: Seitensteuerung steht sauber AUSSERHALB der Job-Schleife ---
+                    # Seitensteuerung steht sauber AUSSERHALB der Job-Schleife
                     current_page += 1
                     time.sleep(0.3)  # Rate-Limiting-Respekt für die Bundesagentur
 
