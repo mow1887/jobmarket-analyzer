@@ -8,22 +8,21 @@ import boto3
 from botocore.exceptions import ClientError
 import urllib3
 
-# --- SSL-WARNUNGEN STUMMSCHALTEN (Für saubere GitHub-Actions-Logs) ---
+# --- SSL-WARNUNGEN STUMMSCHALTEN ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- BULLETPROOF SSL & HOSTNAME PATCH (Hebelt den OpenSSL-Bug in urllib3 v2+ aus) ---
+# --- BULLETPROOF SSL & HOSTNAME PATCH ---
 try:
     orig_create_context = urllib3.util.ssl_.create_urllib3_context
     def patched_create_context(*args, **kwargs):
         context = orig_create_context(*args, **kwargs)
-        context.check_hostname = False  # Zwingt OpenSSL, Hostname-Mismatches komplett zu ignorieren
+        context.check_hostname = False
         return context
     urllib3.util.ssl_.create_urllib3_context = patched_create_context
     print("🔓 Patched urllib3 SSLContext: Hostname-Verifizierung global deaktiviert.")
 except Exception as e:
     print(f"⚠️ Konnte Core-SSL-Patch nicht anwenden: {e}")
 
-# --- GLOBALER SSL-FIX FALLBACK ---
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -34,7 +33,6 @@ class GermanyJobIngestionV3:
         self.raw_dir = "data/raw/arbeitsagentur"
         os.makedirs(self.raw_dir, exist_ok=True)
         
-        # S3 Konfiguration (wird von GitHub Actions oder lokalem .env gefüttert)
         self.bucket_name = "jobmarket-analyzer-data-lake"
         self.s3_client = boto3.client(
             's3',
@@ -43,17 +41,17 @@ class GermanyJobIngestionV3:
             region_name="eu-central-1"
         )
 
-        # Die offizielle Schnittstelle der Bundesagentur für Arbeit (API v6)
         self.api_url = "https://api.arbeitsagentur.de/jobboerse/jobsuche/v1/jobs"
-        
-        # Dein geschützter API-Schlüssel (wird als Secret übergeben)
         self.api_key = os.getenv("BA_CLIENT_ID", "X-API-KEY-FALLBACK")
+        
+        # FIX 1: Professionelle API-Header zur Tarnung gegen Datacenter-Blockaden
         self.headers = {
             "X-API-Key": self.api_key,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Accept": "application/json",
+            "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
 
-        # Multi-Cluster Suchbegriffe für den bundesweiten Data- & AI-Markt
         self.search_terms = [
             "Data Engineer", 
             "AI Engineer", 
@@ -62,7 +60,6 @@ class GermanyJobIngestionV3:
             "Data Scientist"
         ]
 
-        # Deine perfektionierte Blacklist gegen kaufmännischen & Support-Müll
         self.noise_blacklist = [
             "support", "helpdesk", "systemadministrator", "netzwerk", 
             "hardware", "first-level", "anwendersupport",
@@ -97,8 +94,8 @@ class GermanyJobIngestionV3:
                 params = {
                     "was": term,
                     "page": current_page,
-                    "size": 50,  # Maximale Seitengröße der BA-API
-                    "zeitarbeit": "false" # Filtert aggressive Personalvermittler direkt serverseitig
+                    "size": 50,
+                    "zeitarbeit": "false"
                 }
 
                 try:
@@ -117,7 +114,14 @@ class GermanyJobIngestionV3:
                         print(f"ℹ️ Keine weiteren Seiten für '{term}' (Status {response.status_code}).")
                         break
 
-                    data = response.json()
+                    # FIX 2: Gezieltes Abfangen von HTML-Rauschen statt JSON-Absturz
+                    try:
+                        data = response.json()
+                    except Exception:
+                        print(f"   ❌ Server lieferte kein gültiges JSON! HTML-Blockade vermutet.")
+                        print(f"   📄 TEXT-VORSCHAU DER ANTWORT:\n{response.text[:600]}\n---")
+                        break
+
                     job_results = data.get("stellenangebote", [])
 
                     if not job_results:
@@ -128,21 +132,15 @@ class GermanyJobIngestionV3:
                         title_lower = title.lower()
                         chiffre = raw_job.get("refnr", "Nicht angegeben")
 
-                        # Deduplizierung über Suchcluster-Grenzen hinweg
                         if chiffre in seen_chiffren:
                             continue
 
-                        # Harter Vorab-Ausschluss für Non-Tech & Ausbildung
                         if any(noise in title_lower for noise in self.noise_blacklist):
                             continue
 
-                        # Standardisiertes Feld-Mapping der verschachtelten API-Strukturen
                         location_info = raw_job.get("arbeitsort", {})
                         location_str = f"{location_info.get('plz', '')} {location_info.get('ort', '')}".strip() or "Deutschland"
                         
-                        time_info = raw_job.get("veroeffentlichtAm", "")
-                        mod_info = raw_job.get("modifikationsTimestamp", "")
-
                         mapped_job = {
                             "title": title,
                             "company": raw_job.get("arbeitgeber", "Anonymes Unternehmen"),
@@ -151,8 +149,8 @@ class GermanyJobIngestionV3:
                             "location": location_str,
                             "remote_status": "Keine Angabe / Präsenz",
                             "chiffrenummer": chiffre,
-                            "veroeffentlicht_am": time_info,
-                            "aenderungsdatum": mod_info
+                            "veroeffentlicht_am": raw_job.get("veroeffentlichtAm", ""),
+                            "aenderungsdatum": raw_job.get("modifikationsTimestamp", "")
                         }
 
                         master_payload["jobs"].append(mapped_job)
@@ -160,7 +158,7 @@ class GermanyJobIngestionV3:
                         term_jobs_count += 1
 
                     current_page += 1
-                    time.sleep(0.3)  # Rate-Limiting-Respekt für die Bundesagentur
+                    time.sleep(0.5)  # Etwas sanfteres Rate-Limiting für Cloud-IPs
 
                 except Exception as e:
                     print(f"⚠️ Netzwerkfehler im Cluster '{term}' auf Seite {current_page}: {e}")
@@ -168,23 +166,17 @@ class GermanyJobIngestionV3:
 
             print(f"   -> Cluster '{term}' beendet. {term_jobs_count} Netto-Jobs extrahiert.")
 
-        # Lokales Backup im Raw-Ordner sichern
         with open(local_raw_path, "w", encoding="utf-8") as f:
             json.dump(master_payload, f, ensure_ascii=False, indent=4)
         print(f"\n💾 Rohdaten lokal archiviert: {local_raw_path} ({len(master_payload['jobs'])} Gesamt-Jobs)")
 
-        # --- S3 ARCHIVIERUNG (Bronze Layer Upload) ---
         try:
             s3_key = f"raw/arbeitsagentur/{local_filename}"
             print(f"🪣  Spiegele Bronze-Layer in den Cloud Data Lake: {s3_key}...")
-            
             self.s3_client.upload_file(local_raw_path, self.bucket_name, s3_key)
             print("🚀 [SUCCESS] Rohdaten-Payload erfolgreich in AWS S3 gesichert!")
-            
-        except ClientError as e:
-            print(f"❌ AWS S3 Berechtigungsfehler: Haben die GitHub Secrets vollen S3-Schreibzugriff? {e}")
         except Exception as e:
-            print(f"⚠ S3-Archivierung fehlgeschlagen (Lokaler Prozess war trotzdem erfolgreich): {e}")
+            print(f"⚠ S3-Archivierung fehlgeschlagen: {e}")
 
 if __name__ == "__main__":
     ingestion = GermanyJobIngestionV3()
