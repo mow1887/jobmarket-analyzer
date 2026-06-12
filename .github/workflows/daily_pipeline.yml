@@ -2,7 +2,7 @@ name: Daily Job Market ETL Pipeline
 
 on:
   schedule:
-    # Job läuft jeden Tag ca. 03:00 CEST
+    # Führt den Job jeden Tag um 02:00 Uhr UTC aus (ca. 03:00 / 04:00 Uhr deutsche Zeit)
     - cron: '0 2 * * *'
   workflow_dispatch: # Erlaubt es dir, die Pipeline jederzeit händisch bei GitHub per Klick zu starten
 
@@ -15,24 +15,24 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v3
 
-    # 2. Python Umgebung auf dem Server aufsetzen
+    # 2. Python-Umgebung auf dem Server aufsetzen (mit Pip-Caching)
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11' # Stabilste Version für alle Pakete im Linux-Umfeld
+        python-version: '3.11' # Stabilste Version für Playwright im Linux-Umfeld
         cache: 'pip'
 
-    # 3. Alle Abhängigkeiten sauber installieren
+    # 3. Alle Abhängigkeiten sauber aus der requirements.txt installieren
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install playwright boto3 requests
+        pip install -r requirements.txt
         
-    # 4. Playwright Core-Browser auf dem Linux-Runner installieren
+    # 4. Playwright Core-Browser (Chromium) auf dem Linux-Runner installieren
     - name: Install Playwright Chromium
       run: python -m playwright install chromium
 
-    # 5. Schritt A: Ingestion ausführen (Sucht nach neuen Rohdaten & lädt Bronze-Layer zu S3)
+    # 5. Schritt A: Ingestion ausführen (Sucht neue Jobs & lädt Bronze-Layer zu S3)
     - name: Execute Job Ingestion (API Fetch)
       env:
         BA_CLIENT_ID: ${{ secrets.BA_CLIENT_ID }} 
