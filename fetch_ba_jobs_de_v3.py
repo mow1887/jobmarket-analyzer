@@ -1,39 +1,19 @@
 import json
 import os
-import requests
-import time
 import ssl
+import urllib.request
+import urllib.parse
 from datetime import datetime
-import boto3
-from botocore.exceptions import ClientError
-import urllib3
+import time
+import boto3  # NEU: Für die AWS S3 Anbindung
+from botocore.exceptions import ClientError  # NEU: Für S3-Fehlermeldungen
 
-# --- SSL-WARNUNGEN STUMMSCHALTEN ---
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# --- SSL & HOSTNAME PATCH (Sicherheitsnetz für Cloud-Runner) ---
-try:
-    orig_create_context = urllib3.util.ssl_.create_urllib3_context
-    def patched_create_context(*args, **kwargs):
-        context = orig_create_context(*args, **kwargs)
-        context.check_hostname = False
-        return context
-    urllib3.util.ssl_.create_urllib3_context = patched_create_context
-    print("🔓 Patched urllib3 SSLContext: Hostname-Verifizierung global deaktiviert.")
-except Exception as e:
-    print(f"⚠️ Konnte Core-SSL-Patch nicht anwenden: {e}")
-
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-
-class GermanyJobIngestionV3:
+class BundesAgenturSmartPipeline:
     def __init__(self):
-        self.raw_dir = "data/raw/arbeitsagentur"
-        os.makedirs(self.raw_dir, exist_ok=True)
+        self.output_dir = "data/raw/arbeitsagentur"
+        os.makedirs(self.output_dir, exist_ok=True)
         
-        # S3 Target-Bucket (Injektiert über GitHub Secrets)
+        # S3 Konfiguration (wird lokal aus dem Terminal oder auf GitHub aus den Secrets gelesen)
         self.bucket_name = "jobmarket-analyzer-data-lake"
         self.s3_client = boto3.client(
             's3',
@@ -41,143 +21,173 @@ class GermanyJobIngestionV3:
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
             region_name="eu-central-1"
         )
-
-        # --- STABILER ENDPOINT AUS V2 (Öffentliches Web-Gateway) ---
+        
+        # Offizieller v6-Such-Endpunkt der Bundesagentur
         self.api_url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
-        self.api_key = "jobboerse-jobsuche"  # Statisch für diesen Endpoint, kein Secret mehr nötig!
-        
-        self.headers = {
-            "X-API-Key": self.api_key,
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        }
+        self.api_key = "jobboerse-jobsuche"
+        self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
-        # Multi-Cluster Suchbegriffe für maximale Marktabdeckung
-        self.search_terms = [
-            "Data Engineer", 
-            "AI Engineer", 
+    def fetch_targeted_germany_jobs(self):
+        # Die erweiterten Suchbegriff-Cluster für maximale Marktabdeckung
+        search_terms = [
+            "Data", 
+            "BI", 
             "Business Intelligence", 
-            "Webanalyst", 
-            "Data Scientist"
+            "Analytics", 
+            "Analytics Engineer",
+            "AI Engineer", 
+            "Artificial Intelligence",
+            "Künstliche Intelligenz", 
+            "Web Analytics", 
+            "Webanalyst",
+            "Digital Analytics",
+            "Machine Learning",
+            "Data Science"
         ]
-
-        # Deine Noise-Blacklist gegen kaufmännischen Ballast
-        self.noise_blacklist = [
-            "support", "helpdesk", "systemadministrator", "netzwerk", 
-            "hardware", "first-level", "anwendersupport",
-            "ausbildung", "handelsfachwirt", "abiturientenprogramm", 
-            "duales studium b.a.", "verkäufer", "kaufmann", "kauffrau",
-            "marktleiter", "betriebswirt"
-        ]
-
-    def fetch_all_clusters(self):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        local_filename = f"arbeitsagentur_germany_{timestamp}.json"
-        local_raw_path = os.path.join(self.raw_dir, local_filename)
         
-        master_payload = {
-            "metadata": {
-                "extracted_at": datetime.now().isoformat(),
-                "scope": "Germany-Wide Multi-Cluster Ingestion (Web-Endpoint)",
-                "version": "V3-Bronze-Stable"
-            },
-            "jobs": []
-        }
-
-        seen_chiffren = set()
-        print(f"🚀 Starte bundesweite API-Ingestion via rest.arbeitsagentur.de...")
-
-        for term in self.search_terms:
+        # Dictionary zur automatischen In-Memory-Deduplizierung via URL
+        all_combined_jobs = {} 
+        
+        # FIX: Unverified SSL Context gegen das Blockieren der HTTPS-Verbindung
+        context = ssl._create_unverified_context()
+        
+        for term in search_terms:
             current_page = 1
             term_jobs_count = 0
-            print(f"🔍 Cluster: '{term}' wird abgefragt...")
-
-            while True:
+            max_results_per_term = 2500
+            
+            print(f"\n🌍 [SMART INGESTION] Starte Cluster-Abfrage für: '{term}'...")
+            
+            while term_jobs_count < max_results_per_term:
                 params = {
                     "was": term,
                     "page": current_page,
-                    "size": 50,
-                    "zeitarbeit": "false"
+                    "size": 50
                 }
-
+                full_url = f"{self.api_url}?{urllib.parse.urlencode(params)}"
+                
+                req = urllib.request.Request(full_url)
+                req.add_header("X-API-Key", self.api_key)
+                req.add_header("Accept", "application/json")
+                req.add_header("User-Agent", self.user_agent)
+                
                 try:
-                    response = requests.get(
-                        self.api_url, 
-                        headers=self.headers, 
-                        params=params, 
-                        timeout=15, 
-                        verify=False
-                    )
-                    
-                    if response.status_code != 200:
-                        print(f"ℹ️ Keine weiteren Seiten für '{term}' (Status {response.status_code}).")
-                        break
+                    with urllib.request.urlopen(req, context=context, timeout=15) as response:
+                        if response.status == 200:
+                            data = json.loads(response.read().decode("utf-8"))
+                            listings = data.get("ergebnisliste", [])
+                            
+                            if not listings:
+                                break
+                            
+                            current_page_valid = 0
+                            for job in listings:
+                                title = job.get("stellenangebotsTitel") or "Data Professional"
+                                company = job.get("firma") or "Spannendes Unternehmen"
+                                title_lower = title.lower()
+                                
+                                # --- 1. ERWEITERTE MARKT-VALIDIERUNG (Substrings) ---
+                                valid_keywords = [
+                                    "data", "analyst", "analyt", "engineer", "intelligence", 
+                                    "scientist", "bi", "developer", "entwicklung", "cloud", 
+                                    "analytics", "ml", "ai", "ki ", "künstliche intelligenz",
+                                    "artificial", "business intelligence", "big data", "dwh",
+                                    "data warehouse", "reporting", "dashboard", "statistics",
+                                    "statist", "webanalyst", "digital analyt"
+                                ]
+                                
+                                is_valid_data_job = any(keyword in title_lower for keyword in valid_keywords)
+                                
+                                # --- 2. VORAB-AUSSCHLUSS FÜR NON-TECH & AUSBILDUNG ---
+                                noise_blacklist = [
+                                    "support", "helpdesk", "systemadministrator", "netzwerk", 
+                                    "hardware", "first-level", "anwendersupport",
+                                    "ausbildung", "handelsfachwirt", "abiturientenprogramm", 
+                                    "duales studium b.a.", "verkäufer", "kaufmann", "kauffrau",
+                                    "marktleiter", "betriebswirt", "filialteamleitung"
+                                ]
+                                
+                                if any(noise in title_lower for noise in noise_blacklist):
+                                    is_valid_data_job = False
+                                    
+                                # Falls die Validierung fehlschlägt, vorab verwerfen
+                                if not is_valid_data_job:
+                                    continue
 
-                    try:
-                        data = response.json()
-                    except Exception:
-                        print(f"   ❌ Server lieferte kein gültiges JSON!")
-                        print(f"   📄 TEXT-VORSCHAU:\n{response.text[:300]}\n---")
-                        break
+                                # --- 3. DATEN-EXTRAKTION & GEOLOCATION ---
+                                lokationen = job.get("stellenlokationen", [])
+                                location_str = "Deutschland"
+                                if lokationen and "adresse" in lokationen[0]:
+                                    addr = lokationen[0]["adresse"]
+                                    location_str = f"{addr.get('plz', '')} {addr.get('ort', 'Deutschland')}".strip()
 
-                    job_results = data.get("stellenangebote", [])
-                    if not job_results:
-                        break
+                                ref_nr = job.get("referenznummer")
+                                job_link = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{ref_nr}" if ref_nr else (job.get("externeURL") or "No Link")
 
-                    for raw_job in job_results:
-                        title = raw_job.get("titel", "")
-                        title_lower = title.lower()
-                        chiffre = raw_job.get("refnr", "Nicht angegeben")
-
-                        if chiffre in seen_chiffren:
-                            continue
-
-                        if any(noise in title_lower for noise in self.noise_blacklist):
-                            continue
-
-                        location_info = raw_job.get("arbeitsort", {})
-                        location_str = f"{location_info.get('plz', '')} {location_info.get('ort', '')}".strip() or "Deutschland"
-                        
-                        mapped_job = {
-                            "title": title,
-                            "company": raw_job.get("arbeitgeber", "Anonymes Unternehmen"),
-                            "link": raw_job.get("links", {}).get("details", {}).get("href"),
-                            "externe_url": raw_job.get("links", {}).get("externeAnzeige", {}).get("href") or "Keine externe URL",
-                            "location": location_str,
-                            "remote_status": "Keine Angabe / Präsenz",
-                            "chiffrenummer": chiffre,
-                            "veroeffentlicht_am": raw_job.get("veroeffentlichtAm", ""),
-                            "aenderungsdatum": raw_job.get("modifikationsTimestamp", "")
-                        }
-
-                        master_payload["jobs"].append(mapped_job)
-                        seen_chiffren.add(chiffre)
-                        term_jobs_count += 1
-
-                    print(f"   -> Seite {current_page} verarbeitet ({term_jobs_count} Cluster-Jobs im Staging)...")
-                    current_page += 1
-                    time.sleep(0.4)
-
+                                all_combined_jobs[job_link] = {
+                                    "title": title,
+                                    "company": company,
+                                    "link": job_link,
+                                    "location": location_str,
+                                    "remote_status": "Vollständig Remote / Home-Office möglich" if job.get("homeofficemoeglich", False) else "Keine Angabe / Präsenz",
+                                    "chiffrenummer": job.get("chiffrenummer") or "Nicht angegeben",
+                                    "aenderungsdatum": job.get("aenderungsdatum") or "Nicht angegeben",
+                                    "externe_url": job.get("externeURL") or "Keine externe URL",
+                                    "veroeffentlicht_am": job.get("veroeffentlichungszeitraum", {}).get("von") or "Nicht angegeben",
+                                    "scraped_at": datetime.now().isoformat(),
+                                    "source_term_match": term,
+                                    "source_page": current_page
+                                }
+                                current_page_valid += 1
+                                
+                            term_jobs_count += len(listings)
+                            print(f"   ↳ Seite {current_page} verarbeitet ({current_page_valid} valide Data-Jobs extrahiert)...", end="\r")
+                            current_page += 1
+                            time.sleep(0.6)
+                            
                 except Exception as e:
-                    print(f"⚠️ Netzwerkfehler im Cluster '{term}' auf Seite {current_page}: {e}")
+                    print(f"\n   ⚠ Netzwerk- oder Parsing-Fehler bei Seite {current_page}: {e}")
                     break
+            
+            print(f"\n   ✅ Cluster '{term}' verarbeitet. Eindeutige Jobs im Gesamtpool: {len(all_combined_jobs)}")
 
-            print(f"   ✨ Cluster '{term}' erfolgreich beendet. Netto-Jobs: {term_jobs_count}")
+        # --- 4. DATA LAKE PERSISTIERUNG (Raw Layer Landing) ---
+        if all_combined_jobs:
+            final_list = list(all_combined_jobs.values())
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"arbeitsagentur_germany_{timestamp}.json"
+            file_path = os.path.join(self.output_dir, filename)
+            
+            payload = {
+                "metadata": {
+                    "source": "rest.arbeitsagentur.de (Smart Multi-Cluster V3)",
+                    "extracted_at": timestamp,
+                    "total_jobs": len(final_list)
+                },
+                "jobs": final_list
+            }
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=4)
+                
+            print(f"\n🎯 [SUCCESS] Ingestion-Prozess erfolgreich beendet!")
+            print(f"💾 Es wurden {len(final_list)} hochpräzise Data- & AI-Jobs ohne Rauschen extrahiert.")
+            print(f"📁 Zielpfad im Data Lake: {file_path}")
 
-        # Lokales Speichern im Runner-Dateisystem
-        with open(local_raw_path, "w", encoding="utf-8") as f:
-            json.dump(master_payload, f, ensure_ascii=False, indent=4)
-        print(f"\n💾 Rohdaten lokal archiviert: {local_raw_path} ({len(master_payload['jobs'])} Gesamt-Jobs)")
-
-        # --- S3 COLD STORAGE (Bronze Layer Upload) ---
-        try:
-            s3_key = f"raw/arbeitsagentur/{local_filename}"
-            print(f"🪣  Spiegele Bronze-Layer in den Cloud Data Lake: {s3_key}...")
-            self.s3_client.upload_file(local_raw_path, self.bucket_name, s3_key)
-            print("🚀 [SUCCESS] Rohdaten-Payload erfolgreich in AWS S3 gesichert!")
-        except Exception as e:
-            print(f"⚠ S3-Archivierung fehlgeschlagen: {e}")
+            # --- 5. AWS S3 COLD STORAGE (Bronze Layer Upload) ---
+            try:
+                s3_key = f"raw/arbeitsagentur/{filename}"
+                print(f"🪣  Spiegele Bronze-Layer in den Cloud Data Lake: {s3_key}...")
+                
+                self.s3_client.upload_file(file_path, self.bucket_name, s3_key)
+                print("🚀 [SUCCESS] Rohdaten-Payload erfolgreich in AWS S3 gesichert!")
+                
+            except ClientError as e:
+                print(f"❌ AWS S3 Berechtigungsfehler: Haben die Umgebungsvariablen S3-Schreibzugriff? {e}")
+            except Exception as e:
+                print(f"⚠ S3-Archivierung fehlgeschlagen (Lokale Datei existiert): {e}")
 
 if __name__ == "__main__":
-    ingestion = GermanyJobIngestionV3()
-    ingestion.fetch_all_clusters()
+    print("▶ Starte Ingestion Pipeline v3...")
+    pipeline = BundesAgenturSmartPipeline()
+    pipeline.fetch_targeted_germany_jobs()
