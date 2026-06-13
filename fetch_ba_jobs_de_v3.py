@@ -11,7 +11,7 @@ import urllib3
 # --- SSL-WARNUNGEN STUMMSCHALTEN ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- BULLETPROOF SSL & HOSTNAME PATCH ---
+# --- SSL & HOSTNAME PATCH (Sicherheitsnetz für Cloud-Runner) ---
 try:
     orig_create_context = urllib3.util.ssl_.create_urllib3_context
     def patched_create_context(*args, **kwargs):
@@ -33,6 +33,7 @@ class GermanyJobIngestionV3:
         self.raw_dir = "data/raw/arbeitsagentur"
         os.makedirs(self.raw_dir, exist_ok=True)
         
+        # S3 Target-Bucket (Injektiert über GitHub Secrets)
         self.bucket_name = "jobmarket-analyzer-data-lake"
         self.s3_client = boto3.client(
             's3',
@@ -41,17 +42,17 @@ class GermanyJobIngestionV3:
             region_name="eu-central-1"
         )
 
-        self.api_url = "https://api.arbeitsagentur.de/jobboerse/jobsuche/v1/jobs"
-        self.api_key = os.getenv("BA_CLIENT_ID", "X-API-KEY-FALLBACK")
+        # --- STABILER ENDPOINT AUS V2 (Öffentliches Web-Gateway) ---
+        self.api_url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
+        self.api_key = "jobboerse-jobsuche"  # Statisch für diesen Endpoint, kein Secret mehr nötig!
         
-        # FIX 1: Professionelle API-Header zur Tarnung gegen Datacenter-Blockaden
         self.headers = {
             "X-API-Key": self.api_key,
             "Accept": "application/json",
-            "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
 
+        # Multi-Cluster Suchbegriffe für maximale Marktabdeckung
         self.search_terms = [
             "Data Engineer", 
             "AI Engineer", 
@@ -60,6 +61,7 @@ class GermanyJobIngestionV3:
             "Data Scientist"
         ]
 
+        # Deine Noise-Blacklist gegen kaufmännischen Ballast
         self.noise_blacklist = [
             "support", "helpdesk", "systemadministrator", "netzwerk", 
             "hardware", "first-level", "anwendersupport",
@@ -76,14 +78,14 @@ class GermanyJobIngestionV3:
         master_payload = {
             "metadata": {
                 "extracted_at": datetime.now().isoformat(),
-                "scope": "Germany-Wide Multi-Cluster Ingestion",
-                "version": "V3-Bronze"
+                "scope": "Germany-Wide Multi-Cluster Ingestion (Web-Endpoint)",
+                "version": "V3-Bronze-Stable"
             },
             "jobs": []
         }
 
         seen_chiffren = set()
-        print(f"🚀 Starte bundesweite API-Ingestion für {len(self.search_terms)} Suchcluster...")
+        print(f"🚀 Starte bundesweite API-Ingestion via rest.arbeitsagentur.de...")
 
         for term in self.search_terms:
             current_page = 1
@@ -107,23 +109,18 @@ class GermanyJobIngestionV3:
                         verify=False
                     )
                     
-                    if response.status_code == 401:
-                        print("❌ API-Authentifizierung fehlgeschlagen! Bitte BA_CLIENT_ID prüfen.")
-                        break
-                    elif response.status_code != 200:
+                    if response.status_code != 200:
                         print(f"ℹ️ Keine weiteren Seiten für '{term}' (Status {response.status_code}).")
                         break
 
-                    # FIX 2: Gezieltes Abfangen von HTML-Rauschen statt JSON-Absturz
                     try:
                         data = response.json()
                     except Exception:
-                        print(f"   ❌ Server lieferte kein gültiges JSON! HTML-Blockade vermutet.")
-                        print(f"   📄 TEXT-VORSCHAU DER ANTWORT:\n{response.text[:600]}\n---")
+                        print(f"   ❌ Server lieferte kein gültiges JSON!")
+                        print(f"   📄 TEXT-VORSCHAU:\n{response.text[:300]}\n---")
                         break
 
                     job_results = data.get("stellenangebote", [])
-
                     if not job_results:
                         break
 
@@ -157,19 +154,22 @@ class GermanyJobIngestionV3:
                         seen_chiffren.add(chiffre)
                         term_jobs_count += 1
 
+                    print(f"   -> Seite {current_page} verarbeitet ({term_jobs_count} Cluster-Jobs im Staging)...")
                     current_page += 1
-                    time.sleep(0.5)  # Etwas sanfteres Rate-Limiting für Cloud-IPs
+                    time.sleep(0.4)
 
                 except Exception as e:
                     print(f"⚠️ Netzwerkfehler im Cluster '{term}' auf Seite {current_page}: {e}")
                     break
 
-            print(f"   -> Cluster '{term}' beendet. {term_jobs_count} Netto-Jobs extrahiert.")
+            print(f"   ✨ Cluster '{term}' erfolgreich beendet. Netto-Jobs: {term_jobs_count}")
 
+        # Lokales Speichern im Runner-Dateisystem
         with open(local_raw_path, "w", encoding="utf-8") as f:
             json.dump(master_payload, f, ensure_ascii=False, indent=4)
         print(f"\n💾 Rohdaten lokal archiviert: {local_raw_path} ({len(master_payload['jobs'])} Gesamt-Jobs)")
 
+        # --- S3 COLD STORAGE (Bronze Layer Upload) ---
         try:
             s3_key = f"raw/arbeitsagentur/{local_filename}"
             print(f"🪣  Spiegele Bronze-Layer in den Cloud Data Lake: {s3_key}...")
