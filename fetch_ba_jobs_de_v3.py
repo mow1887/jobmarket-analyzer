@@ -30,7 +30,11 @@ class BundesAgenturSmartPipeline:
     def fetch_targeted_germany_jobs(self):
         # Die erweiterten Suchbegriff-Cluster für maximale Marktabdeckung
         search_terms = [
-            "Data", 
+            "Data",
+            "Data Engineer",
+            "Data Analyst",
+            "Datenanalyst",
+            "Business Analyst",
             "BI", 
             "Business Intelligence", 
             "Analytics", 
