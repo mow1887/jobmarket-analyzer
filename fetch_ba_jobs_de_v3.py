@@ -5,15 +5,15 @@ import urllib.request
 import urllib.parse
 from datetime import datetime
 import time
-import boto3  # NEU: Für die AWS S3 Anbindung
-from botocore.exceptions import ClientError  # NEU: Für S3-Fehlermeldungen
+import boto3
+from botocore.exceptions import ClientError
 
 class BundesAgenturSmartPipeline:
     def __init__(self):
         self.output_dir = "data/raw/arbeitsagentur"
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # S3 Konfiguration (wird lokal aus dem Terminal oder auf GitHub aus den Secrets gelesen)
+        # S3 Configuration (read locally from terminal or on GitHub from repository secrets)
         self.bucket_name = "jobmarket-analyzer-data-lake"
         self.s3_client = boto3.client(
             's3',
@@ -22,13 +22,13 @@ class BundesAgenturSmartPipeline:
             region_name="eu-central-1"
         )
         
-        # Offizieller v6-Such-Endpunkt der Bundesagentur
+        # Official v6 search endpoint of the Bundesagentur für Arbeit
         self.api_url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
         self.api_key = "jobboerse-jobsuche"
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     def fetch_targeted_germany_jobs(self):
-        # Die erweiterten Suchbegriff-Cluster für maximale Marktabdeckung
+        # Extended search term clusters for maximum market coverage
         search_terms = [
             "Data",
             "Data Engineer",
@@ -49,10 +49,10 @@ class BundesAgenturSmartPipeline:
             "Data Science"
         ]
         
-        # Dictionary zur automatischen In-Memory-Deduplizierung via URL
+        # Dictionary for automatic in-memory deduplication via job link URL
         all_combined_jobs = {} 
         
-        # FIX: Unverified SSL Context gegen das Blockieren der HTTPS-Verbindung
+        # FIX: Unverified SSL context to prevent blocking of the HTTPS connection
         context = ssl._create_unverified_context()
         
         for term in search_terms:
@@ -60,7 +60,7 @@ class BundesAgenturSmartPipeline:
             term_jobs_count = 0
             max_results_per_term = 2500
             
-            print(f"\n🌍 [SMART INGESTION] Starte Cluster-Abfrage für: '{term}'...")
+            print(f"\n🌍 [SMART INGESTION] Starting cluster query for: '{term}'...")
             
             while term_jobs_count < max_results_per_term:
                 params = {
@@ -87,10 +87,10 @@ class BundesAgenturSmartPipeline:
                             current_page_valid = 0
                             for job in listings:
                                 title = job.get("stellenangebotsTitel") or "Data Professional"
-                                company = job.get("firma") or "Spannendes Unternehmen"
+                                company = job.get("firma") or "Exciting Company"
                                 title_lower = title.lower()
                                 
-                                # --- 1. ERWEITERTE MARKT-VALIDIERUNG (Substrings) ---
+                                # --- 1. EXTENDED MARKET VALIDATION (Substrings) ---
                                 valid_keywords = [
                                     "data", "analyst", "analyt", "engineer", "intelligence", 
                                     "scientist", "bi", "developer", "entwicklung", "cloud", 
@@ -102,7 +102,7 @@ class BundesAgenturSmartPipeline:
                                 
                                 is_valid_data_job = any(keyword in title_lower for keyword in valid_keywords)
                                 
-                                # --- 2. VORAB-AUSSCHLUSS FÜR NON-TECH & AUSBILDUNG ---
+                                # --- 2. PRE-EXCLUSION FOR NON-TECH & APPRENTICESHIPS ---
                                 noise_blacklist = [
                                     "support", "helpdesk", "systemadministrator", "netzwerk", 
                                     "hardware", "first-level", "anwendersupport",
@@ -114,16 +114,16 @@ class BundesAgenturSmartPipeline:
                                 if any(noise in title_lower for noise in noise_blacklist):
                                     is_valid_data_job = False
                                     
-                                # Falls die Validierung fehlschlägt, vorab verwerfen
+                                # Discard early if validation fails
                                 if not is_valid_data_job:
                                     continue
 
-                                # --- 3. DATEN-EXTRAKTION & GEOLOCATION ---
-                                lokationen = job.get("stellenlokationen", [])
-                                location_str = "Deutschland"
-                                if lokationen and "adresse" in lokationen[0]:
-                                    addr = lokationen[0]["adresse"]
-                                    location_str = f"{addr.get('plz', '')} {addr.get('ort', 'Deutschland')}".strip()
+                                # --- 3. DATA EXTRACTION & GEOLOCATION ---
+                                locations = job.get("stellenlokationen", [])
+                                location_str = "Germany"
+                                if locations and "adresse" in locations[0]:
+                                    addr = locations[0]["adresse"]
+                                    location_str = f"{addr.get('plz', '')} {addr.get('ort', 'Germany')}".strip()
 
                                 ref_nr = job.get("referenznummer")
                                 job_link = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{ref_nr}" if ref_nr else (job.get("externeURL") or "No Link")
@@ -133,11 +133,11 @@ class BundesAgenturSmartPipeline:
                                     "company": company,
                                     "link": job_link,
                                     "location": location_str,
-                                    "remote_status": "Vollständig Remote / Home-Office möglich" if job.get("homeofficemoeglich", False) else "Keine Angabe / Präsenz",
-                                    "chiffrenummer": job.get("chiffrenummer") or "Nicht angegeben",
-                                    "aenderungsdatum": job.get("aenderungsdatum") or "Nicht angegeben",
-                                    "externe_url": job.get("externeURL") or "Keine externe URL",
-                                    "veroeffentlicht_am": job.get("veroeffentlichungszeitraum", {}).get("von") or "Nicht angegeben",
+                                    "remote_status": "Fully Remote / Home office possible" if job.get("homeofficemoeglich", False) else "Not specified / On-site",
+                                    "chiffrenummer": job.get("chiffrenummer") or "Not specified",
+                                    "modification_date": job.get("aenderungsdatum") or "Not specified",
+                                    "external_url": job.get("externeURL") or "No external URL",
+                                    "published_at": job.get("veroeffentlichungszeitraum", {}).get("von") or "Not specified",
                                     "scraped_at": datetime.now().isoformat(),
                                     "source_term_match": term,
                                     "source_page": current_page
@@ -145,17 +145,17 @@ class BundesAgenturSmartPipeline:
                                 current_page_valid += 1
                                 
                             term_jobs_count += len(listings)
-                            print(f"   ↳ Seite {current_page} verarbeitet ({current_page_valid} valide Data-Jobs extrahiert)...", end="\r")
+                            print(f"   ↳ Page {current_page} processed ({current_page_valid} valid data jobs extracted)...", end="\r")
                             current_page += 1
                             time.sleep(0.6)
                             
                 except Exception as e:
-                    print(f"\n   ⚠ Netzwerk- oder Parsing-Fehler bei Seite {current_page}: {e}")
+                    print(f"\n   ⚠ Network or parsing error on page {current_page}: {e}")
                     break
             
-            print(f"\n   ✅ Cluster '{term}' verarbeitet. Eindeutige Jobs im Gesamtpool: {len(all_combined_jobs)}")
+            print(f"\n   ✅ Cluster '{term}' processed. Unique jobs in total pool: {len(all_combined_jobs)}")
 
-        # --- 4. DATA LAKE PERSISTIERUNG (Raw Layer Landing) ---
+        # --- 4. DATA LAKE PERSISTENCE (Raw Layer Landing) ---
         if all_combined_jobs:
             final_list = list(all_combined_jobs.values())
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -174,24 +174,24 @@ class BundesAgenturSmartPipeline:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=4)
                 
-            print(f"\n🎯 [SUCCESS] Ingestion-Prozess erfolgreich beendet!")
-            print(f"💾 Es wurden {len(final_list)} hochpräzise Data- & AI-Jobs ohne Rauschen extrahiert.")
-            print(f"📁 Zielpfad im Data Lake: {file_path}")
+            print(f"\n🎯 [SUCCESS] Ingestion process completed successfully!")
+            print(f"💾 Extracted {len(final_list)} high-precision data & AI jobs without noise.")
+            print(f"📁 Target path in local Data Lake: {file_path}")
 
             # --- 5. AWS S3 COLD STORAGE (Bronze Layer Upload) ---
             try:
                 s3_key = f"raw/arbeitsagentur/{filename}"
-                print(f"🪣  Spiegele Bronze-Layer in den Cloud Data Lake: {s3_key}...")
+                print(f"🪣  Mirroring Bronze Layer to Cloud Data Lake: {s3_key}...")
                 
                 self.s3_client.upload_file(file_path, self.bucket_name, s3_key)
-                print("🚀 [SUCCESS] Rohdaten-Payload erfolgreich in AWS S3 gesichert!")
+                print("🚀 [SUCCESS] Raw data payload successfully secured in AWS S3!")
                 
             except ClientError as e:
-                print(f"❌ AWS S3 Berechtigungsfehler: Haben die Umgebungsvariablen S3-Schreibzugriff? {e}")
+                print(f"❌ AWS S3 permission error: Do the environment variables have S3 write access? {e}")
             except Exception as e:
-                print(f"⚠ S3-Archivierung fehlgeschlagen (Lokale Datei existiert): {e}")
+                print(f"⚠ S3 archiving failed (Local file exists): {e}")
 
 if __name__ == "__main__":
-    print("▶ Starte Ingestion Pipeline v3...")
+    print("▶ Starting Ingestion Pipeline v3...")
     pipeline = BundesAgenturSmartPipeline()
     pipeline.fetch_targeted_germany_jobs()

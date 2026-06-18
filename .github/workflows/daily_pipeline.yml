@@ -2,9 +2,9 @@ name: Daily Job Market ETL Pipeline
 
 on:
   schedule:
-    # Führt den Job jeden Tag um 02:00 Uhr UTC aus (ca. 03:00 / 04:00 Uhr deutsche Zeit)
-    - cron: '0 2 * * *'
-  workflow_dispatch: # Erlaubt es dir, die Pipeline jederzeit händisch bei GitHub per Klick zu starten
+    # 01:30 CEST
+    - cron: '30 23 * * *'
+  workflow_dispatch:
 
 jobs:
   run-etl:

@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_jobs
+    description: "Bereinigte und harmonisierte Job-Ausschreibungen aus der Bundesagentur für Arbeit. Enthält extrahierte Geo-Daten für den DACH-Raum."
+    columns:
+      - name: job_id
+        description: "Primärschlüssel (Chiffrenummer)."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: clean_city
+        description: "Bereinigter Stadtname ohne Postleitzahl."
+        data_tests:
+          - not_null
+
+      - name: country
+        description: "Land hergeleitete auf PLZ-Struktur."
+        data_tests:
+          - accepted_values:
+              values: ['Deutschland', 'Österreich', 'Schweiz']

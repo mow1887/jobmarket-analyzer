@@ -1,5 +1,6 @@
 # Virtuelle Umgebung ignorieren
 .venv/
+.venv_dbt/
 venv/
 env/
 

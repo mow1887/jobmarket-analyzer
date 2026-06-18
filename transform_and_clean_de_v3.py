@@ -10,13 +10,13 @@ from botocore.exceptions import ClientError
 
 class GermanyJobTransformerV3:
     def __init__(self):
-        # Pfade für die V3 Staging-Zone (Wechsel auf Silver-Layer Nomenklatur)
+        # Paths for the V3 staging zone (switching to Silver Layer nomenclature)
         self.raw_dir = "data/raw/arbeitsagentur"
         self.silver_dir = "data/silver"
         self.master_file = os.path.join(self.silver_dir, "master_enriched_jobs_de.json")
         os.makedirs(self.silver_dir, exist_ok=True)
         
-        # AWS S3 Konfiguration
+        # AWS S3 Configuration
         self.s3_client = boto3.client(
             's3',
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -26,7 +26,7 @@ class GermanyJobTransformerV3:
         self.bucket_name = "jobmarket-analyzer-data-lake"
         self.s3_key = "silver/master_enriched_jobs_de.json"
         
-        # Deine optimierte Tech-Keyword-Matrix
+        # Optimized tech keyword matrix (matching German job postings)
         self.tech_keywords = {
             "Python": ["python", "pandas", "numpy", "scikit", "pyspark", "scipy", "statsmodels"],
             "R": [" r ", "r-studio", "rstudio", "ggplot2"],
@@ -66,7 +66,7 @@ class GermanyJobTransformerV3:
             "RAG & Vector DBs": ["rag", "retrieval-augmented", "knowledge engineering", "rag canvas", "vector database", "chromadb", "pinecone"]
         }
         
-        # Deine Kriterien-Matrix für formelle Anforderungen
+        # Criteria matrix for formal requirements (matching German job postings)
         self.education_keywords = {
             "Wirtschaftsinformatik": ["wirtschaftsinformatik", "business informatics"],
             "Informatik": ["informatik", "computer science", "tech-studium", "software engineering"],
@@ -81,28 +81,28 @@ class GermanyJobTransformerV3:
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     def download_master_from_s3(self):
-        """Holt den bestehenden Master-Pool aus dem S3 Data Lake."""
+        """Fetches the existing master pool from the S3 Data Lake."""
         try:
-            print("🪣  Lade bestehenden Master-Pool aus AWS S3...")
+            print("🪣  Downloading existing master pool from AWS S3...")
             self.s3_client.download_file(self.bucket_name, self.s3_key, self.master_file)
-            print("✅ Master-Pool erfolgreich aus S3 heruntergeladen.")
+            print("✅ Master pool successfully downloaded from S3.")
         except ClientError as e:
             if e.response['Error']['Code'] == "404":
-                print("ℹ️ Keine Master-Datei im S3 Bucket gefunden. Initialisiere leeren Pool.")
+                print("ℹ️ No master file found in S3 bucket. Initializing empty pool.")
                 with open(self.master_file, "w", encoding="utf-8") as f:
                     json.dump({"jobs": []}, f)
             else:
-                print(f"❌ Unerwarteter AWS S3 Fehler beim Download: {e}")
+                print(f"❌ Unexpected AWS S3 error during download: {e}")
                 raise e
 
     def upload_master_to_s3(self):
-        """Sichert den aktualisierten Master-Datenbestand im zentralen S3 Bucket."""
+        """Secures the updated master dataset in the central S3 bucket."""
         try:
-            print("🪣  Synchronisiere aktualisierte Master-Daten mit AWS S3...")
+            print("🪣  Synchronizing updated master data with AWS S3...")
             self.s3_client.upload_file(self.master_file, self.bucket_name, self.s3_key)
-            print("🚀 [SUCCESS] Upload abgeschlossen. AWS S3 Data Lake ist up-to-date!")
+            print("🚀 [SUCCESS] Upload completed. AWS S3 Data Lake is up-to-date!")
         except Exception as e:
-            print(f"❌ Fehler beim AWS S3 Upload: {e}")
+            print(f"❌ Error during AWS S3 upload: {e}")
 
     def _load_existing_master(self) -> dict:
         if os.path.exists(self.master_file):
@@ -116,21 +116,21 @@ class GermanyJobTransformerV3:
     def _get_latest_raw_file(self) -> str:
         files = glob.glob(os.path.join(self.raw_dir, "arbeitsagentur_germany_*.json"))
         if not files:
-            raise FileNotFoundError("❌ Keine Rohdaten im Ingestion-Ordner gefunden!")
+            raise FileNotFoundError("❌ No raw data found in the ingestion folder!")
         return max(files, key=os.path.getctime)
 
     def extract_salary(self, text: str) -> str:
         salary_pattern = r"(\d{2,3}\.\d{3})\s*€?\s*(?:-|bis)?\s*(\d{2,3}\.\d{3})\s*€?\s*/?\s*(?:jahr|monat|an)?"
         match = re.search(salary_pattern, text.lower())
         if match:
-            return f"{match.group(1)} € - {match.group(2)} € / Jahr"
+            return f"{match.group(1)} € - {match.group(2)} € / Year"
         
         fallback_pattern = r"(\d{2,3}\.\d{3})\s*€"
         matches = re.findall(fallback_pattern, text)
         if len(matches) >= 2:
-            return f"{matches[0]} € - {matches[1]} € / Jahr"
+            return f"{matches[0]} € - {matches[1]} € / Year"
             
-        return "Keine Angabe"
+        return "Not specified"
 
     def determine_experience_level(self, title: str, full_text: str) -> str:
         title_lower = title.lower()
@@ -161,7 +161,7 @@ class GermanyJobTransformerV3:
         return "Regular"
 
     def process_incremental_enrichment(self, process_all: bool = False):
-        # 1. Vorab-Synchronisation mit der Cloud
+        # 1. Pre-synchronization with the cloud
         if not process_all:
             self.download_master_from_s3()
             
@@ -170,48 +170,48 @@ class GermanyJobTransformerV3:
         today_str = datetime.now().strftime("%Y-%m-%d")
         
         if process_all:
-            print("⚠️  [RESET MODE] Gesamter Pool wird lokal neu aufgebaut und überschrieben!")
+            print("⚠️  [RESET MODE] Entire pool is being rebuilt locally and overwritten!")
             master_data = {"jobs": []}
 
         with open(raw_file, "r", encoding="utf-8") as f:
             raw_payload = json.load(f)
             
         raw_jobs = raw_payload.get("jobs", [])
-        print(f"📖 Rohdaten aus Staging geladen: {len(raw_jobs)} Jobs gefunden.")
+        print(f"📖 Raw data loaded from staging: {len(raw_jobs)} jobs found.")
         
-        # In-Memory Mapping über Dictionary für schnellen O(1) Zugriff
+        # In-memory mapping via dictionary for fast O(1) access
         master_dict = {j["link"]: j for j in master_data.get("jobs", []) if j.get("link")}
         
         delta_jobs = []
         
-        # --- Timestamps & Inkrementelles Lifecycle-Tracking ---
+        # --- Timestamps & Incremental Lifecycle Tracking ---
         for job in raw_jobs:
             link = job.get("link")
             if not link:
                 continue
                 
             if link in master_dict:
-                # Job ist heute wieder in der API -> Er ist aktiv! last_seen auf heute setzen
+                # Job is in the API again today -> It is active! Set last_seen to today
                 master_dict[link]["last_seen"] = today_str
-                # Flüchtige Meta-Updates mitnehmen
+                # Capture transient metadata updates
                 master_dict[link]["remote_status"] = job.get("remote_status") or master_dict[link]["remote_status"]
-                master_dict[link]["aenderungsdatum"] = job.get("aenderungsdatum") or master_dict[link]["aenderungsdatum"]
+                master_dict[link]["modification_date"] = job.get("modification_date") or master_dict[link].get("modification_date")
             else:
-                # Job ist komplett neu -> Muss tiefenanalysiert werden
+                # Job is completely new -> Requires deep analysis
                 delta_jobs.append(job)
 
-        print(f"🔄 Delta-Analyse aktiv: {len(delta_jobs)} brandneue Jobs werden tiefenanalysiert.")
+        print(f"🔄 Delta analysis active: {len(delta_jobs)} brand new jobs will be analyzed in depth.")
         
         if not delta_jobs:
-            print("✨ S3 Datenbestand und lokale Ingestion sind synchron. Keine neuen Jobs zu verarbeiten.")
-            # Dennoch Master abspeichern, da bestehende Jobs ein last_seen-Update bekommen haben könnten
+            print("✨ S3 dataset and local ingestion are synchronized. No new jobs to process.")
+            # Save master anyway, as existing jobs might have received a last_seen update
             master_data["jobs"] = list(master_dict.values())
             with open(self.master_file, "w", encoding="utf-8") as f:
                 json.dump(master_data, f, ensure_ascii=False, indent=4)
             self.upload_master_to_s3()
             return
 
-        print("🤖 Starte Headless Browser für inhaltsbasierte Kaskaden-Extraktion...")
+        print("🤖 Starting headless browser for content-based cascade extraction...")
         
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -220,18 +220,18 @@ class GermanyJobTransformerV3:
             
             for i, job in enumerate(delta_jobs):
                 title = job.get("title") or "Data Professional"
-                company = job.get("company") or "Spannendes Unternehmen"
+                company = job.get("company") or "Exciting Company"
                 primary_url = job.get("link")
-                fallback_url = job.get("externe_url")
+                fallback_url = job.get("external_url")
                 
-                print(f"[{i+1}/{len(delta_jobs)}] Verarbeite: {title} ({company})...")
+                print(f"[{i+1}/{len(delta_jobs)}] Processing: {title} ({company})...")
                 
                 visible_text = ""
-                salary_info = "Keine Angabe"
+                salary_info = "Not specified"
                 target_url_used = primary_url
                 detected_techs = set()
                 
-                # --- PRIO 1: Hauptseite der Bundesagentur für Arbeit einlesen ---
+                # --- PRIO 1: Read main page of the Bundesagentur für Arbeit ---
                 if primary_url and primary_url.startswith("http"):
                     try:
                         page.goto(primary_url, wait_until="domcontentloaded", timeout=10000)
@@ -250,7 +250,7 @@ class GermanyJobTransformerV3:
                     except Exception:
                         pass
                 
-                # --- PRIO 2: INHALTSBASIERTER KASKADEN-CHECK ---
+                # --- PRIO 2: CONTENT-BASED CASCADE CHECK ---
                 text_lower_primary = visible_text.lower() if visible_text else ""
                 is_placeholder_or_empty = (
                     not visible_text 
@@ -259,9 +259,9 @@ class GermanyJobTransformerV3:
                     or (fallback_url and "ams.at" in fallback_url)
                 )
 
-                if is_placeholder_or_empty and fallback_url and fallback_url.startswith("http") and fallback_url != "Keine externe URL":
+                if is_placeholder_or_empty and fallback_url and fallback_url.startswith("http") and fallback_url != "No external URL":
                     try:
-                        print(f"    🔗 Kaskade getriggert. Deep Scan auf externem Portal...")
+                        print(f"    🔗 Cascade triggered. Deep scan on external portal...")
                         page.goto(fallback_url, wait_until="networkidle", timeout=15000)
                         page.wait_for_timeout(1500)
                         
@@ -288,12 +288,12 @@ class GermanyJobTransformerV3:
                                         detected_techs.add(tech)
                                         break
                             
-                            if salary_info == "Keine Angabe":
+                            if salary_info == "Not specified":
                                 salary_info = self.extract_salary(visible_text)
                     except Exception as e:
-                        print(f"    ⚠ Kaskaden-Fallback fehlgeschlagen oder geblockt: {e}")
+                        print(f"    ⚠ Cascade fallback failed or blocked: {e}")
 
-                # --- FINALES TEXT-MAPPING & FORMALIA ---
+                # --- FINAL TEXT MAPPING & FORMALITIES ---
                 text_lower = re.sub(r'\s+', ' ', visible_text.lower())
                 
                 detected_edu = {}
@@ -301,20 +301,20 @@ class GermanyJobTransformerV3:
                     detected_edu[criteria] = any(syn in text_lower for syn in synonyms)
                 
                 experience_level = self.determine_experience_level(title, visible_text)
-                tech_list = list(detected_techs) if detected_techs else ["Klassische Tools / Offene Recherche"]
+                tech_list = list(detected_techs) if detected_techs else ["Classic Tools / Open Research"]
 
-                # Erstellung des strukturierten JSON-Objekts mit Injektion der Zeitstempel
+                # Creating the structured JSON object with timestamp injection
                 enriched_job = {
                     "title": title,
                     "company": company,
                     "link": primary_url,
-                    "externe_url": fallback_url,
+                    "external_url": fallback_url,
                     "resolved_url": target_url_used,
                     "location": job.get("location"),
                     "remote_status": job.get("remote_status"),
                     "chiffrenummer": job.get("chiffrenummer"),
-                    "veroeffentlicht_am": job.get("veroeffentlicht_am"),
-                    "aenderungsdatum": job.get("aenderungsdatum"),
+                    "published_at": job.get("published_at"),
+                    "modification_date": job.get("modification_date"),
                     "experience_level": experience_level,
                     "salary_extracted": salary_info,
                     "technologies": tech_list,
@@ -327,15 +327,15 @@ class GermanyJobTransformerV3:
                     "data_governance_required": detected_edu.get("Data Governance & Privacy", False),
                     "focuses_on_data_quality": detected_edu.get("Data Quality & QA", False),
                     "processed_at": datetime.now().isoformat(),
-                    # 🔥 TIMESTAMPS FÜR HISTORISIERUNG INJIZIEREN
+                    # 🔥 INJECT TIMESTAMPS FOR HISTORIZATION
                     "first_seen": today_str,
                     "last_seen": today_str
                 }
                 
-                # In den Master-Pool übernehmen
+                # Merge into the master pool
                 master_dict[primary_url] = enriched_job
                 
-                # Checkpoint-Backup alle 50 Jobs gegen Datenverlust schreiben
+                # Write checkpoint backup every 50 jobs to prevent data loss
                 if i % 50 == 0:
                     master_data["jobs"] = list(master_dict.values())
                     with open(self.master_file, "w", encoding="utf-8") as f:
@@ -343,7 +343,7 @@ class GermanyJobTransformerV3:
 
             browser.close()
 
-        # 4. Zusammenführung & Metadaten schreiben
+        # 4. Consolidation & writing metadata
         final_jobs_list = list(master_dict.values())
         master_data["metadata"] = {
             "source": "rest.arbeitsagentur.de (Smart Multi-Cluster V3)",
@@ -352,14 +352,14 @@ class GermanyJobTransformerV3:
         }
         master_data["jobs"] = final_jobs_list
 
-        # Finale lokale Speicherung
+        # Final local persistence
         with open(self.master_file, "w", encoding="utf-8") as f:
             json.dump(master_data, f, ensure_ascii=False, indent=4)
             
-        print(f"\n🎯 Transformation lokal abgeschlossen! Datei gesichert unter: {self.master_file}")
-        print(f"📊 Gesamtpool enthält jetzt {len(final_jobs_list)} lückenlos historisierte Jobs.")
+        print(f"\n🎯 Transformation completed locally! File saved under: {self.master_file}")
+        print(f"📊 Total pool now contains {len(final_jobs_list)} seamlessly historized jobs.")
         
-        # 5. Finaler Cloud-Upload in den Silver Layer
+        # 5. Final cloud upload to the Silver Layer
         self.upload_master_to_s3()
 
 if __name__ == "__main__":
