@@ -1,15 +1,36 @@
-# Virtuelle Umgebung ignorieren
+# Airflow runtime, instance databases, and execution logs
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+airflow/unittests.cfg
+
+# dbt compilation artifacts, logs, and downloaded packages
+target/
+dbt_packages/
+logs/
+dbt_modules/
+
+# Python virtual environments, compiled files, and testing caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .venv/
 .venv_dbt/
 venv/
 env/
+.pytest_cache/
 
-# Python-Cache ignorieren
-__pycache__/
-*.pyc
-
-# Lokale Daten-Dumps ignorieren
-data/
-
-# Lokale Passwörter/Konfigurationen
+# Local data storage, migrations, and environment credentials
 .env
+data/
+data/raw/
+data/silver/
+archive/
+
+# System-specific files and IDE configurations
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

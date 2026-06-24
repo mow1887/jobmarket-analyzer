@@ -58,7 +58,7 @@ class GermanyJobTransformerV3:
             "Looker": ["looker", "google looker"],
             "Excel": ["excel", "tabellenkalkulation", "vba", "spreadsheets"],
             "Machine Learning": ["machine learning", "ml", "scikit-learn", "regression", "classification", "clustering", "k-means", "random forest"],
-            "Deep Learning": ["deep learning", "tensorflow", "keras", "pytorch", "neural networks", "neuronale netze", "ann", "rnn"],
+            "Deep Learning": ["deep learning", "tensorflow", "keras", "pytorch", "neural networks", "neuronale netze"],
             "NLP": ["nlp", "natural language processing", "text mining", "textanalyse"],
             "Time Series": ["time series", "zeitreihen", "zeitreihenanalyse", "forecasting"],
             "LLM & Prompting": ["llm", "large language model", "prompt engineering", "structured prompting", "prompting", "gpt-4", "claude"],

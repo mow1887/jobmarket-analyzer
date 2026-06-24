@@ -12,9 +12,18 @@ SELECT
     first_seen,
     publication_date,
     last_seen,
-    matches_wirtschaftsinformatik,
-    technologies,
     job_link,
+    technologies,
+
+    -- ALLE Anforderungen aus dem Scraper freischalten:
+    matches_wirtschaftsinformatik,
+    matches_informatik,
+    matches_mathematik_statistik,
+    verlangt_studium,
+    requires_phd,
+    eu_ai_act_relevant,
+    data_governance_required,
+    focuses_on_data_quality,
 
     -- Geo-Bereinigung
     REGEXP_SUBSTR(location, '\\b\\d{4,5}\\b') AS postal_code,
@@ -28,6 +37,4 @@ SELECT
     END AS country
 
 FROM raw_jobs
-
--- Filtert Duplikate heraus: Nummeriert Zeilen pro job_id und behält nur die mit dem neuesten Datum
 QUALIFY ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY last_seen DESC) = 1
