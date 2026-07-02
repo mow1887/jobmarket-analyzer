@@ -33,7 +33,7 @@ class GermanyJobTransformerV3:
             "SQL": ["sql", "postgres", "mysql", "oracle", "pl/sql", "tsql", "sqlite", "mariadb"],
             "Unix/Shell": ["unix", "command line", "kommandozeile", "bash", "shell", "powershell"],
             "Git/Version Control": ["git", "github", "gitlab", "bitbucket", "versionskontrolle"],
-            "AWS": ["aws", "amazon web services", "s3", "ec2", "rds", "redshift", "glue", "lambda", "iam", "vpc"],
+            "AWS": ["aws", "amazon web services", "aws s3", "s3 bucket", "ec2", "rds", "redshift", "glue", "lambda", "iam", "vpc"],
             "GCP": ["gcp", "google cloud", "google cloud platform", "bigquery", "vertex ai", "looker studio"],
             "Azure": ["azure", "microsoft azure", "synapse", "data factory", "azure devops"],
             "Terraform": ["terraform", "infrastructure as code", "iac"],
@@ -247,6 +247,8 @@ class GermanyJobTransformerV3:
                                         continue
                                     if syn == "ml" and not re.search(r"\bml\b", text_lower_ba):
                                         continue
+                                    if syn in ["aws", "rds", "glue", "iam", "vpc"] and not re.search(rf"\b{syn}\b", text_lower_ba):
+                                        continue
                                     detected_techs.add(tech)
                                     break
                     except Exception:
@@ -293,6 +295,8 @@ class GermanyJobTransformerV3:
                                         if syn == "git" and not re.search(r"\bgit\b", text_lower_ext):
                                             continue
                                         if syn == "ml" and not re.search(r"\bml\b", text_lower_ext):
+                                            continue
+                                        if syn in ["aws", "rds", "glue", "iam", "vpc"] and not re.search(rf"\b{syn}\b", text_lower_ba):
                                             continue
                                         detected_techs.add(tech)
                                         break

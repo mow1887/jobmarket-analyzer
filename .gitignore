@@ -21,6 +21,7 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
+.streamlit/secrets.toml
 
 # Local data storage, migrations, and environment credentials
 .env

@@ -12,9 +12,10 @@ select
     country,
     first_seen,
     publication_date,
+    last_seen, -- Added to track posting lifespans in downstream BI tools
     experience_level,
     
-    -- NEU: Automatisiertes Clustering der Job-Rollen
+    -- Automated clustering of target data job roles
     case
         when lower(job_title) like '%analytics engineer%' then 'Analytics Engineer'
         when lower(job_title) like '%data engineer%' or lower(job_title) like '%dateningenieur%' or lower(job_title) like '%cloud engineer%' then 'Data Engineer'
