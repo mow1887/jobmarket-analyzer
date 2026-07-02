@@ -37,16 +37,17 @@ class GermanyJobTransformerV3:
             "GCP": ["gcp", "google cloud", "google cloud platform", "bigquery", "vertex ai", "looker studio"],
             "Azure": ["azure", "microsoft azure", "synapse", "data factory", "azure devops"],
             "Terraform": ["terraform", "infrastructure as code", "iac"],
-            "ETL/ELT": ["etl", "elt", "data pipeline", "datenpipeline", "integration", "data integration"],
+            "ETL/ELT": ["etl", "elt", "data pipeline", "datenpipeline", "data integration"],
             "Airflow": ["airflow", "apache airflow"],
             "Prefect/Dagster": ["prefect", "dagster"],
             "dbt": ["dbt", "data build tool", "data-build-tool"],
             "Webhooks/APIs": ["webhook", "webhooks", "rest api", "rest-api", "api integration"],
             "n8n/Low-Code": ["n8n", "low-code", "low code", "workflow-automatisierung", "make.com", "zapier"],
-            "Spark": ["spark", "apache spark", "pyspark", "databricks"],
+            "Spark": ["spark", "apache spark", "pyspark"],
             "Databricks": ["databricks"],
             "Kafka": ["kafka", "apache kafka", "event streaming", "data streaming"],
             "Snowflake": ["snowflake", "snowflake data cloud"],
+            "Microsoft Fabric": ["fabric", "microsoft fabric", "ms fabric"],
             "Hadoop/Hive": ["hadoop", "hive", "mapreduce"],
             "NoSQL": ["nosql", "mongodb", "cassandra", "redis", "dynamodb"],
             "Docker": ["docker", "docker-compose", "docker compose"],
@@ -72,6 +73,8 @@ class GermanyJobTransformerV3:
             "Informatik": ["informatik", "computer science", "tech-studium", "software engineering"],
             "Mathematik/Statistik": ["mathematik", "statistik", "mathematics", "statistics", "data science studium"],
             "Abgeschlossenes Studium": ["abgeschlossenes studium", "hochschulstudium", "universitätsabschluss", "bachelor", "master", "diplom", "studium", "degree", "university degree"],
+            "Bachelor": ["bachelor", "b.sc.", "b.a."],
+            "Master": ["master", "m.sc.", "m.a."],
             "Promotion/PhD": ["phd", "promotion", "dr.", "doctorate", "wissenschaftlicher mitarbeiter"],
             "EU AI Act Compliance": ["eu ai act", "ai act", "ki-gesetz", "ki governance", "ai governance", "ai-act"],
             "Data Governance & Privacy": ["data governance", "daten-governance", "datenschutz", "gdpr", "dsgvo", "data privacy"],
@@ -161,7 +164,6 @@ class GermanyJobTransformerV3:
         return "Regular"
 
     def process_incremental_enrichment(self, process_all: bool = False):
-        # 1. Pre-synchronization with the cloud
         if not process_all:
             self.download_master_from_s3()
             
@@ -179,32 +181,25 @@ class GermanyJobTransformerV3:
         raw_jobs = raw_payload.get("jobs", [])
         print(f"📖 Raw data loaded from staging: {len(raw_jobs)} jobs found.")
         
-        # In-memory mapping via dictionary for fast O(1) access
         master_dict = {j["link"]: j for j in master_data.get("jobs", []) if j.get("link")}
-        
         delta_jobs = []
         
-        # --- Timestamps & Incremental Lifecycle Tracking ---
         for job in raw_jobs:
             link = job.get("link")
             if not link:
                 continue
                 
             if link in master_dict:
-                # Job is in the API again today -> It is active! Set last_seen to today
                 master_dict[link]["last_seen"] = today_str
-                # Capture transient metadata updates
                 master_dict[link]["remote_status"] = job.get("remote_status") or master_dict[link]["remote_status"]
                 master_dict[link]["modification_date"] = job.get("modification_date") or master_dict[link].get("modification_date")
             else:
-                # Job is completely new -> Requires deep analysis
                 delta_jobs.append(job)
 
         print(f"🔄 Delta analysis active: {len(delta_jobs)} brand new jobs will be analyzed in depth.")
         
         if not delta_jobs:
             print("✨ S3 dataset and local ingestion are synchronized. No new jobs to process.")
-            # Save master anyway, as existing jobs might have received a last_seen update
             master_data["jobs"] = list(master_dict.values())
             with open(self.master_file, "w", encoding="utf-8") as f:
                 json.dump(master_data, f, ensure_ascii=False, indent=4)
@@ -243,7 +238,14 @@ class GermanyJobTransformerV3:
                         for tech, synonyms in self.tech_keywords.items():
                             for syn in synonyms:
                                 if syn in text_lower_ba:
+                                    # 🔥 ENHANCED: Word boundary safeguards for short substrings
+                                    if syn in ["etl", "elt"] and not re.search(r"\b(etl|elt)\b", text_lower_ba):
+                                        continue
                                     if syn == "rag" and not re.search(r"\brag\b", text_lower_ba):
+                                        continue
+                                    if syn == "git" and not re.search(r"\bgit\b", text_lower_ba):
+                                        continue
+                                    if syn == "ml" and not re.search(r"\bml\b", text_lower_ba):
                                         continue
                                     detected_techs.add(tech)
                                     break
@@ -283,7 +285,14 @@ class GermanyJobTransformerV3:
                             for tech, synonyms in self.tech_keywords.items():
                                 for syn in synonyms:
                                     if syn in text_lower_ext:
+                                        # 🔥 ENHANCED: Word boundary safeguards for short substrings
+                                        if syn in ["etl", "elt"] and not re.search(r"\b(etl|elt)\b", text_lower_ext):
+                                            continue
                                         if syn == "rag" and not re.search(r"\brag\b", text_lower_ext):
+                                            continue
+                                        if syn == "git" and not re.search(r"\bgit\b", text_lower_ext):
+                                            continue
+                                        if syn == "ml" and not re.search(r"\bml\b", text_lower_ext):
                                             continue
                                         detected_techs.add(tech)
                                         break
@@ -303,7 +312,6 @@ class GermanyJobTransformerV3:
                 experience_level = self.determine_experience_level(title, visible_text)
                 tech_list = list(detected_techs) if detected_techs else ["Classic Tools / Open Research"]
 
-                # Creating the structured JSON object with timestamp injection
                 enriched_job = {
                     "title": title,
                     "company": company,
@@ -322,20 +330,19 @@ class GermanyJobTransformerV3:
                     "matches_informatik": detected_edu.get("Informatik", False),
                     "matches_mathematik_statistik": detected_edu.get("Mathematik/Statistik", False),
                     "verlangt_studium": detected_edu.get("Abgeschlossenes Studium", False),
+                    "requires_bachelor": detected_edu.get("Bachelor", False), 
+                    "requires_master": detected_edu.get("Master", False),     
                     "requires_phd": detected_edu.get("Promotion/PhD", False),
                     "eu_ai_act_relevant": detected_edu.get("EU AI Act Compliance", False),
                     "data_governance_required": detected_edu.get("Data Governance & Privacy", False),
                     "focuses_on_data_quality": detected_edu.get("Data Quality & QA", False),
                     "processed_at": datetime.now().isoformat(),
-                    # 🔥 INJECT TIMESTAMPS FOR HISTORIZATION
                     "first_seen": today_str,
                     "last_seen": today_str
                 }
                 
-                # Merge into the master pool
                 master_dict[primary_url] = enriched_job
                 
-                # Write checkpoint backup every 50 jobs to prevent data loss
                 if i % 50 == 0:
                     master_data["jobs"] = list(master_dict.values())
                     with open(self.master_file, "w", encoding="utf-8") as f:
@@ -343,7 +350,6 @@ class GermanyJobTransformerV3:
 
             browser.close()
 
-        # 4. Consolidation & writing metadata
         final_jobs_list = list(master_dict.values())
         master_data["metadata"] = {
             "source": "rest.arbeitsagentur.de (Smart Multi-Cluster V3)",
@@ -352,14 +358,12 @@ class GermanyJobTransformerV3:
         }
         master_data["jobs"] = final_jobs_list
 
-        # Final local persistence
         with open(self.master_file, "w", encoding="utf-8") as f:
             json.dump(master_data, f, ensure_ascii=False, indent=4)
             
         print(f"\n🎯 Transformation completed locally! File saved under: {self.master_file}")
         print(f"📊 Total pool now contains {len(final_jobs_list)} seamlessly historized jobs.")
         
-        # 5. Final cloud upload to the Silver Layer
         self.upload_master_to_s3()
 
 if __name__ == "__main__":
