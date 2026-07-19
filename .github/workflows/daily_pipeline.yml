@@ -38,11 +38,11 @@ jobs:
         BA_CLIENT_ID: ${{ secrets.BA_CLIENT_ID }} 
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      run: src/python fetch_ba_jobs.py
+      run: python -m src.fetch_ba_jobs
 
     # 6. Schritt B: Transformation & S3-Synchronisation ausführen (Silver-Layer zu S3)
     - name: Execute Transformation & S3-Sync
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      run: src/python transform_and_clean.py
+      run: python -m src.transform_and_clean.py
