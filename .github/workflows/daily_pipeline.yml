@@ -11,28 +11,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Code aus dem GitHub Repository auschecken
+    # 1. Checkout the code from the GitHub repository
     - name: Checkout Repository
       uses: actions/checkout@v3
 
-    # 2. Python-Umgebung auf dem Server aufsetzen (mit Pip-Caching)
+    # 2. Set up the Python environment on the server
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11' # Stabilste Version für Playwright im Linux-Umfeld
+        python-version: '3.11'
         cache: 'pip'
 
-    # 3. Alle Abhängigkeiten sauber aus der requirements.txt installieren
+    # 3. Cleanly install all dependencies from requirements.txt
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-    # 4. Playwright Core-Browser (Chromium) auf dem Linux-Runner installieren
+    # 4. Install Playwright core browser on the Linux runner
     - name: Install Playwright Chromium
       run: python -m playwright install chromium
 
-    # 5. Schritt A: Ingestion ausführen (Sucht neue Jobs & lädt Bronze-Layer zu S3)
+    # 5. Step A: Execute ingestion
     - name: Execute Job Ingestion (API Fetch)
       env:
         BA_CLIENT_ID: ${{ secrets.BA_CLIENT_ID }} 
@@ -40,7 +40,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       run: python -m src.fetch_ba_jobs
 
-    # 6. Schritt B: Transformation & S3-Synchronisation ausführen (Silver-Layer zu S3)
+    # 6. Step B: Execute transformation & S3 synchronization
     - name: Execute Transformation & S3-Sync
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
